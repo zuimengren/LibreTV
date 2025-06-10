@@ -88,7 +88,8 @@ let shortcutHintTimeout = null; // 用于控制快捷键提示显示时间
 let adFilteringEnabled = true; // 默认开启广告过滤
 let progressSaveInterval = null; // 定期保存进度的计时器
 let currentVideoUrl = ''; // 记录当前实际的视频URL
-let pendingFullscreenRestore = false; // 标记是否需要恢复全屏状态
+const isWebkit = (typeof window.webkitConvertPointFromNodeToPage === 'function')
+Artplayer.FULLSCREEN_WEB_IN_BODY = true;
 
 // 页面加载
 document.addEventListener('DOMContentLoaded', function () {
@@ -450,7 +451,7 @@ function initPlayer(videoUrl) {
         playbackRate: true,
         aspectRatio: false,
         fullscreen: true,
-        fullscreenWeb: false,
+        fullscreenWeb: true,
         subtitleOffset: false,
         miniProgressBar: true,
         mutex: true,
@@ -576,6 +577,82 @@ function initPlayer(videoUrl) {
         }
     });
 
+    // 自动隐藏工具栏的逻辑
+    let hideTimer;
+    const HIDE_DELAY = 2000; // 2秒后隐藏
+
+    // 创建鼠标跟踪状态
+    let isMouseActive = false;
+    let isMouseOverPlayer = false;
+
+    function hideControls() {
+        if (isMouseActive || !isMouseOverPlayer) return;
+        art.controls.classList.add('art-controls-hide');
+    }
+
+    function showControls() {
+        art.controls.classList.remove('art-controls-hide');
+    }
+
+    function resetHideTimer() {
+        clearTimeout(hideTimer);
+        showControls();
+        isMouseActive = true;
+
+        hideTimer = setTimeout(() => {
+            isMouseActive = false;
+            hideControls();
+        }, HIDE_DELAY);
+    }
+
+    // 监听全屏状态变化
+    art.on('fullscreenWeb:enter', () => {
+        // 添加全局事件监听
+        document.addEventListener('mousemove', resetHideTimer);
+        document.addEventListener('mouseleave', handleMouseLeave);
+        document.addEventListener('mouseenter', handleMouseEnter);
+
+        // 添加播放器区域事件
+        art.player.addEventListener('mouseenter', () => isMouseOverPlayer = true);
+        art.player.addEventListener('mouseleave', () => isMouseOverPlayer = false);
+
+        // 初始状态
+        isMouseOverPlayer = true;
+        resetHideTimer();
+    });
+
+    art.on('fullscreenWeb:exit', () => {
+        // 移除所有事件监听
+        document.removeEventListener('mousemove', resetHideTimer);
+        document.removeEventListener('mouseleave', handleMouseLeave);
+        document.removeEventListener('mouseenter', handleMouseEnter);
+
+        art.player.removeEventListener('mouseenter', () => isMouseOverPlayer = true);
+        art.player.removeEventListener('mouseleave', () => isMouseOverPlayer = false);
+
+        // 清除定时器并显示控件
+        clearTimeout(hideTimer);
+        showControls();
+    });
+
+    // 处理鼠标离开浏览器窗口
+    function handleMouseLeave() {
+        // 立即隐藏工具栏
+        hideControls();
+        clearTimeout(hideTimer);
+    }
+    
+    // 处理鼠标返回浏览器窗口
+    function handleMouseEnter() {
+        isMouseActive = true;
+        resetHideTimer();
+    }
+
+    // 播放器加载完成后初始隐藏工具栏
+    art.on('ready', () => {
+        art.controls.classList.add('art-controls-hide');
+    });
+
     // 全屏模式处理
     art.on('fullscreen', function () {
         if (window.screen.orientation && window.screen.orientation.lock) {
@@ -627,12 +704,6 @@ function initPlayer(videoUrl) {
 
         // 启动定期保存播放进度
         startProgressSaveInterval();
-
-        // 检查是否需要恢复全屏状态
-        if (pendingFullscreenRestore) {
-            art.fullscreen = true;
-            pendingFullscreenRestore = false; // 重置标记
-        }
     })
 
     // 错误处理
@@ -662,9 +733,6 @@ function initPlayer(videoUrl) {
 
         // 如果自动播放下一集开启，且确实有下一集
         if (autoplayEnabled && currentEpisodeIndex < currentEpisodes.length - 1) {
-            // 记录是否需要恢复全屏状态
-            pendingFullscreenRestore = art.fullscreen;
-
             // 稍长延迟以确保所有事件处理完成
             setTimeout(() => {
                 // 确认不是因为用户拖拽导致的假结束事件
@@ -823,7 +891,7 @@ function renderEpisodes() {
             <button id="episode-${realIndex}" 
                     onclick="playEpisode(${realIndex})" 
                     class="px-4 py-2 ${isActive ? 'episode-active' : '!bg-[#222] hover:!bg-[#333] hover:!shadow-none'} !border ${isActive ? '!border-blue-500' : '!border-[#333]'} rounded-lg transition-colors text-center episode-btn">
-                第${realIndex + 1}集
+                ${realIndex + 1}
             </button>
         `;
     });
@@ -879,7 +947,11 @@ function playEpisode(index) {
     currentUrl.searchParams.delete('position');
     window.history.replaceState({}, '', currentUrl.toString());
 
-    initPlayer(url);
+    if (isWebkit) {
+        initPlayer(url);
+    } else {
+        art.switch = url;
+    }
 
     // 更新UI
     updateEpisodeInfo();
